@@ -31,14 +31,11 @@ static void hdr(const char* title) {
               << "\n" << std::string(62, '=') << "\n";
 }
 
-// Helper: generate one order's fields from a single RNG output
 struct GenOrder {
     Side     side;
     Price    price;
     Quantity qty;
 };
-
-// ── 1. Single-thread matching throughput ─────────────────────────
 
 static void bench_raw(size_t N) {
     pin_to_core(0);
@@ -73,8 +70,6 @@ static void bench_raw(size_t N) {
               << "  Trades      : " << book.trade_count() << "\n";
 }
 
-// ── 2. Single-thread INSERT-ONLY with software-pipelined prefetch
-
 static void bench_insert_pipelined(const char* tag, size_t N,
                                     Price buy_lo, Price buy_hi,
                                     Price sell_lo, Price sell_hi) {
@@ -102,7 +97,6 @@ static void bench_insert_pipelined(const char* tag, size_t N,
         return { buy ? Side::Buy : Side::Sell, p, q };
     };
 
-    // Prime pipeline
     uint64_t r0 = rng.next();
     auto g0 = gen(r0);
     Order* cur = arena.allocate_fast(
@@ -110,14 +104,11 @@ static void bench_insert_pipelined(const char* tag, size_t N,
 
     auto t0 = Clock::now();
     for (size_t i = 1; i < N; ++i) {
-        // Generate NEXT order & prefetch its target level
         uint64_t r = rng.next();
         auto g = gen(r);
         Order* nxt = arena.allocate_fast(
             static_cast<OrderId>(arena.used()), g.side, g.price, g.qty);
         book.prefetch_for_insert(g.price);
-
-        // Process CURRENT order (prefetched data from previous iteration)
         book.add_order(cur);
         cur = nxt;
     }
@@ -134,7 +125,6 @@ static void bench_insert_pipelined(const char* tag, size_t N,
               << " (" << (max_p - min_p + 1) * 16 / 1024 << " KB)\n";
 }
 
-// Non-pipelined version for comparison
 static void bench_insert(const char* tag, size_t N,
                           Price buy_lo, Price buy_hi,
                           Price sell_lo, Price sell_hi) {
@@ -177,8 +167,6 @@ static void bench_insert(const char* tag, size_t N,
               << " (" << (max_p - min_p + 1) * 16 / 1024 << " KB)\n";
 }
 
-// ── 3. Single-thread latency percentiles ─────────────────────────
-
 static void bench_latency(size_t N) {
     pin_to_core(0);
     hdr("SINGLE-THREAD  LATENCY");
@@ -220,8 +208,6 @@ static void bench_latency(size_t N) {
               << "  Max    : " << lat.back()    << " ns\n";
 }
 
-// ── 4. Cancel ────────────────────────────────────────────────────
-
 static void bench_cancel(size_t N) {
     pin_to_core(0);
     char buf[128];
@@ -262,8 +248,6 @@ static void bench_cancel(size_t N) {
               << std::setprecision(2)
               << "  Throughput : " << (N / sec) / 1e6 << " M cancels/sec\n";
 }
-
-// ── 5. Multi-thread ──────────────────────────────────────────────
 
 struct WorkerResult {
     uint64_t orders  = 0;
@@ -314,7 +298,6 @@ static WorkerResult worker_insert_pipelined(int core, size_t N, uint64_t seed,
         return { buy ? Side::Buy : Side::Sell, p, q };
     };
 
-    // Prime
     auto g0 = gen(rng.next());
     Order* cur = arena.allocate_fast(
         static_cast<OrderId>(arena.used()), g0.side, g0.price, g0.qty);
@@ -339,7 +322,7 @@ static void run_mt(const char* label, unsigned nt, size_t per,
                     bool pipelined, Price blo, Price bhi, Price slo, Price shi) {
     char buf[128];
     std::snprintf(buf, sizeof(buf),
-        "MULTI-THREAD  %s  (%u × %zuM%s)", label, nt, per / 1'000'000,
+        "MULTI-THREAD  %s  (%u x %zuM%s)", label, nt, per / 1'000'000,
         pipelined ? " prefetched" : "");
     hdr(buf);
 
@@ -373,8 +356,6 @@ static void run_mt(const char* label, unsigned nt, size_t per,
         std::cout << "    [" << t << "] " << std::setprecision(1)
                   << (res[t].orders / res[t].elapsed) / 1e6 << " M/s\n";
 }
-
-// ── 6. Scaling + projection ──────────────────────────────────────
 
 static void scaling(size_t per, Price blo, Price bhi, Price slo, Price shi) {
     unsigned hw = std::thread::hardware_concurrency();
@@ -418,14 +399,12 @@ static void scaling(size_t per, Price blo, Price bhi, Price slo, Price shi) {
               << "\n  Projected aggregate (linear scaling):\n";
     for (unsigned c : {8u, 16u, 32u, 64u, 128u}) {
         double proj = single_rate * c;
-        std::cout << "    " << std::setw(4) << c << " cores → "
+        std::cout << "    " << std::setw(4) << c << " cores -> "
                   << std::setprecision(2) << proj / 1e9 << " B orders/sec";
         if (proj >= 1e9) std::cout << " ★";
         std::cout << "\n";
     }
 }
-
-// ── Main ─────────────────────────────────────────────────────────
 
 int main() {
     std::cout << "╔══════════════════════════════════════════════════════╗\n"
@@ -437,22 +416,18 @@ int main() {
               << "  |  sizeof(Order)=" << sizeof(Order)
               << "  sizeof(PriceLevel)=" << sizeof(PriceLevel) << "\n";
 
-    // ── Single-thread ──
     bench_raw(1'000'000);
     bench_raw(10'000'000);
 
-    // Insert-only: baseline vs prefetched
     bench_insert("(narrow)", 10'000'000, 9000, 9500, 10500, 11000);
     bench_insert_pipelined("(narrow)", 10'000'000, 9000, 9500, 10500, 11000);
 
     bench_latency(1'000'000);
     bench_cancel(500'000);
 
-    // ── Multi-thread ──
     run_mt("MATCHING", hw, 10'000'000, false, 0, 0, 0, 0);
     run_mt("INSERT-ONLY", hw, 10'000'000, true, 9000, 9500, 10500, 11000);
 
-    // ── Scaling curve + projection ──
     scaling(5'000'000, 9000, 9500, 10500, 11000);
 
     std::cout << "\nDone.\n";

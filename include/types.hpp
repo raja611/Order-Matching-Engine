@@ -7,33 +7,29 @@
 
 namespace ome {
 
-using Price    = int32_t;    // fixed-point × 100;  supports ±$21.4M
+using Price    = int32_t;
 using Quantity = uint32_t;
-using OrderId  = uint32_t;   // supports 4B orders per arena
+using OrderId  = uint32_t;
 using Symbol   = uint32_t;
 
-constexpr uint32_t NULL_IDX = 0;   // index 0 is reserved as sentinel
+constexpr uint32_t NULL_IDX = 0;
 
 enum class Side : uint8_t { Buy, Sell };
 enum class OrderType : uint8_t { Limit, Market };
 enum class OrderStatus : uint8_t { New, PartiallyFilled, Filled, Cancelled, Rejected };
 
-// ── Compact Order: exactly 32 bytes ─────────────────────────────
-// Intrusive DLL uses arena indices (uint32_t) instead of 8-byte
-// pointers, halving link overhead and fitting 2 orders per cache line.
 struct Order {
-    OrderId     id;               //  4
-    Price       price;            //  4
-    Quantity    quantity;         //  4
-    Quantity    filled_quantity;  //  4
-    uint32_t    prev_idx;         //  4   (arena index, 0 = null)
-    uint32_t    next_idx;         //  4
-    Symbol      symbol;           //  4
-    Side        side;             //  1
-    OrderType   type;             //  1
-    OrderStatus status;           //  1
-    uint8_t     _pad;             //  1
-                                  // ───  32B total
+    OrderId     id;
+    Price       price;
+    Quantity    quantity;
+    Quantity    filled_quantity;
+    uint32_t    prev_idx;
+    uint32_t    next_idx;
+    Symbol      symbol;
+    Side        side;
+    OrderType   type;
+    OrderStatus status;
+    uint8_t     _pad;
 
     void init(OrderId id_, Symbol sym, Side s, OrderType t, Price p, Quantity q) noexcept {
         id = id_; price = p; quantity = q; filled_quantity = 0;
@@ -56,8 +52,6 @@ struct Trade {
     Quantity quantity;
 };
 
-// ── Pre-allocated flat arena ────────────────────────────────────
-// Slot 0 is reserved as the null sentinel.  Valid IDs start at 1.
 class OrderArena {
 public:
     explicit OrderArena(size_t capacity)
@@ -72,9 +66,7 @@ public:
         return o;
     }
 
-    // Fast path: only write fields that differ from zero.
-    // Relies on arena being memset(0) at construction — prev_idx, next_idx,
-    // filled_quantity, status(New=0), type(Limit=0) are already correct.
+    // Skips writing fields that are already zero from memset
     [[gnu::always_inline]]
     Order* allocate_fast(OrderId id_override, Side side, Price price, Quantity qty) noexcept {
         Order* o = &storage_[next_++];
@@ -95,8 +87,6 @@ private:
     uint32_t next_;
 };
 
-// ── Ultra-fast PRNG (SplitMix64) ────────────────────────────────
-// ~1–2 ns/call  vs  ~5–10 ns for mt19937_64.
 struct SplitMix64 {
     uint64_t s;
     explicit SplitMix64(uint64_t seed = 0) noexcept : s(seed) {}
@@ -108,18 +98,16 @@ struct SplitMix64 {
         return z ^ (z >> 31);
     }
     uint32_t next_u32() noexcept { return static_cast<uint32_t>(next()); }
-    // Unbiased range [lo, hi] — fast modulo (slight bias OK for bench)
     int32_t range(int32_t lo, int32_t hi) noexcept {
         return lo + static_cast<int32_t>(next_u32() % static_cast<uint32_t>(hi - lo + 1));
     }
     bool coin() noexcept { return next() & 1; }
 };
 
-// ── Display helpers ─────────────────────────────────────────────
-
 inline const char* side_str(Side s) noexcept {
     return s == Side::Buy ? "BUY" : "SELL";
 }
+
 inline const char* status_str(OrderStatus s) noexcept {
     switch (s) {
         case OrderStatus::New:             return "NEW";

@@ -6,14 +6,11 @@
 
 namespace ome {
 
-// ── 16-byte PriceLevel with index-based intrusive DLL ───────────
-
 struct PriceLevel {
-    uint32_t head_idx = NULL_IDX;   //  4
-    uint32_t tail_idx = NULL_IDX;   //  4
-    Quantity total_qty = 0;         //  4
-    uint32_t count     = 0;         //  4
-                                    // ── 16 total
+    uint32_t head_idx = NULL_IDX;
+    uint32_t tail_idx = NULL_IDX;
+    Quantity total_qty = 0;
+    uint32_t count     = 0;
 
     [[gnu::always_inline]]
     void push_back(uint32_t idx, Order* base) noexcept {
@@ -55,14 +52,6 @@ struct PriceLevel {
 
 static_assert(sizeof(PriceLevel) == 16, "PriceLevel must be 16 bytes");
 
-// ── Flat-array CLOB — entire hot path inline for zero call overhead
-//
-//  • Price levels: contiguous array indexed by (price - min_price)  → O(1)
-//  • Intrusive DLL per level with 4-byte arena indices             → O(1) append/unlink
-//  • 32-byte Orders + 16-byte Levels  → 2× cache density vs v1
-//  • All matching/insert code in this header  → compiler can fully
-//    inline and schedule the critical path with no cross-TU barrier.
-
 class FlatOrderBook {
 public:
     struct MatchResult {
@@ -83,12 +72,10 @@ public:
           levels_(static_cast<size_t>(max_price - min_price + 1))
     {}
 
-    // ── HOT PATH — fully inline ─────────────────────────────────
-
     [[gnu::always_inline]]
     MatchResult add_order(Order* order) noexcept {
         MatchResult r{};
-        uint32_t idx = order->id;  // id == arena index
+        uint32_t idx = order->id;
 
         if (order->type == OrderType::Limit) [[likely]] {
             if (order->side == Side::Buy)
@@ -102,7 +89,6 @@ public:
                 match_market_sell(order, idx, r);
         }
 
-        // Rest unfilled limit orders
         if (!order->is_filled() && order->type == OrderType::Limit
             && order->status != OrderStatus::Cancelled) [[likely]] {
             if (order->filled_quantity > 0)
@@ -142,8 +128,6 @@ public:
         return true;
     }
 
-    // ── Accessors ───────────────────────────────────────────────
-
     Symbol   symbol()         const noexcept { return symbol_; }
     Price    best_bid()       const noexcept { return best_bid_; }
     Price    best_ask_raw()   const noexcept { return best_ask_; }
@@ -154,8 +138,6 @@ public:
     uint64_t total_volume()   const noexcept { return total_volume_; }
     size_t   resting_orders() const noexcept { return resting_count_; }
 
-    // Issue prefetch for the level + tail order that price `p` will hit.
-    // Call ~1 iteration ahead for software pipelining.
     void prefetch_for_insert(Price p) noexcept {
         auto& lv = level_at(p);
         __builtin_prefetch(&lv, 1, 3);
@@ -171,8 +153,6 @@ private:
     PriceLevel& level_at(Price p) noexcept {
         return levels_[static_cast<size_t>(p - min_price_)];
     }
-
-    // ── Limit matching ──────────────────────────────────────────
 
     [[gnu::always_inline]]
     void match_limit_buy(Order* inc, uint32_t /*inc_idx*/, MatchResult& r) noexcept {
@@ -218,8 +198,6 @@ private:
         }
     }
 
-    // ── Market matching ─────────────────────────────────────────
-
     void match_market_buy(Order* inc, uint32_t /*idx*/, MatchResult& r) noexcept {
         while (inc->remaining() > 0 && best_ask_ <= max_price_) {
             auto& lv = level_at(best_ask_);
@@ -260,8 +238,6 @@ private:
         }
     }
 
-    // ── Fill execution ──────────────────────────────────────────
-
     [[gnu::always_inline]]
     void exec_fill(Order* buy, Order* sell, Quantity qty, MatchResult& r) noexcept {
         buy->filled_quantity  += qty;
@@ -272,8 +248,6 @@ private:
         total_volume_ += qty;
     }
 
-    // ── Best-price advance ──────────────────────────────────────
-
     void advance_best_ask() noexcept {
         while (best_ask_ <= max_price_ && level_at(best_ask_).empty())
             ++best_ask_;
@@ -282,8 +256,6 @@ private:
         while (best_bid_ >= min_price_ && level_at(best_bid_).empty())
             --best_bid_;
     }
-
-    // ── Data ────────────────────────────────────────────────────
 
     Symbol  symbol_;
     Price   min_price_;
