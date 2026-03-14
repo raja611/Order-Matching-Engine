@@ -37,5 +37,16 @@
 *.out
 *.app
 
-# debug information files
+# Debug information files
 *.dwo
+
+# Build directories
+./build
+./bench/build
+
+# PGO artifacts
+*.gcda
+*.gcno
+
+./CODE_EXPLANATION.md
+./OPTIMIZATION_JOURNEY.md
